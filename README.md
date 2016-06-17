@@ -1,3 +1,5 @@
+[![npm version](https://badge.fury.io/js/sly-browserify.svg)](https://badge.fury.io/js/sly-browserify)
+
 # sly-browserify
 A fork of the excellent [sly.js](https://github.com/darsain/sly) Pegged @1.2.1 to be used with [browserify](http://browserify.org)
 
