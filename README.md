@@ -11,8 +11,7 @@ require('sly-browserify')($, window); // Sly is now global
 ```
 
 # Todos
-- add to npm
-- add jquery as dependency?
+- add jquery as a dependency?
 
 # Licence
 MIT
