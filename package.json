@@ -1,5 +1,12 @@
 {
 	"name": "sly-browserify",
+  "description": "sly.js for browserify",
 	"main": "./dist/sly.js",
-	"version": "1.2.1"
+  "author": "karl Pokus <karl.pokus@gmail.com>",
+	"version": "1.2.1",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/karlpokus/sly-browserify"
+  },
+  "license": "MIT"
 }
