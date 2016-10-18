@@ -1,6 +1,7 @@
 /*!
- * sly 1.2.1 - 12th Nov 2013
+ * sly 1.6.1a - 19 Oct 2016
  * https://github.com/Darsain/sly
+ * https://github.com/pnghai/sly-browserify
  *
  * Licensed under the MIT license.
  * http://opensource.org/licenses/MIT
@@ -24,11 +25,30 @@ module.exports = function ($, w) {
 	var dragInitEvents = 'touchstart.' + namespace + ' mousedown.' + namespace;
 	var dragMouseEvents = 'mousemove.' + namespace + ' mouseup.' + namespace;
 	var dragTouchEvents = 'touchmove.' + namespace + ' touchend.' + namespace;
+	var wheelEvent = (document.implementation.hasFeature('Event.wheel', '3.0') ? 'wheel.' : 'mousewheel.') + namespace;
 	var clickEvent = 'click.' + namespace;
 	var mouseDownEvent = 'mousedown.' + namespace;
 	var interactiveElements = ['INPUT', 'SELECT', 'BUTTON', 'TEXTAREA'];
 	var tmpArray = [];
 	var time;
+
+	// Math shorthands
+	var abs = Math.abs;
+	var sqrt = Math.sqrt;
+	var pow = Math.pow;
+	var round = Math.round;
+	var max = Math.max;
+	var min = Math.min;
+
+	// Keep track of last fired global wheel event
+	var lastGlobalWheel = 0;
+	$doc.on(wheelEvent, function (event) {
+		var sly = event.originalEvent[namespace];
+		var time = +new Date();
+		// Update last global wheel time, but only when event didn't originate
+		// in Sly frame, or the origin was less than scrollHijack time ago
+		if (!sly || sly.options.scrollHijack < time - lastGlobalWheel) lastGlobalWheel = time;
+	});
 
 	/**
 	 * Sly.
@@ -40,6 +60,8 @@ module.exports = function ($, w) {
 	 * @param {Object}  callbackMap Callbacks map.
 	 */
 	function Sly(frame, options, callbackMap) {
+		if (!(this instanceof Sly)) return new Sly(frame, options, callbackMap);
+
 		// Extend options
 		var o = $.extend({}, Sly.defaults, options);
 
@@ -49,7 +71,7 @@ module.exports = function ($, w) {
 
 		// Frame
 		var $frame = $(frame);
-		var $slidee = $frame.children().eq(0);
+		var $slidee = o.slidee ? $(o.slidee).eq(0) : $frame.children().eq(0);
 		var frameSize = 0;
 		var slideeSize = 0;
 		var pos = {
@@ -83,9 +105,15 @@ module.exports = function ($, w) {
 			firstItem: 0,
 			lastItem: 0,
 			centerItem: 0,
-			activeItem: -1,
+			activeItem: null,
 			activePage: 0
 		};
+
+		// Styles
+		var frameStyles = new StyleRestorer($frame[0]);
+		var slideeStyles = new StyleRestorer($slidee[0]);
+		var sbStyles = new StyleRestorer($sb[0]);
+		var handleStyles = new StyleRestorer($handle[0]);
 
 		// Navigation type booleans
 		var basicNav = o.itemNav === 'basic';
@@ -138,13 +166,14 @@ module.exports = function ($, w) {
 		self.dragging = dragging;
 
 		/**
-		 * (Re)Loading function.
+		 * Loading function.
 		 *
 		 * Populate arrays, set sizes, bind events, ...
 		 *
+		 * @param {Boolean} [isInit] Whether load is called from within self.init().
 		 * @return {Void}
 		 */
-		function load() {
+		function load(isInit) {
 			// Local variables
 			var lastItemsCount = 0;
 			var lastPagesCount = pages.length;
@@ -160,7 +189,7 @@ module.exports = function ($, w) {
 
 			// Set position limits & relatives
 			pos.start = 0;
-			pos.end = Math.max(slideeSize - frameSize, 0);
+			pos.end = max(slideeSize - frameSize, 0);
 
 			// Sizes & offsets for item based navigations
 			if (itemNav) {
@@ -187,7 +216,8 @@ module.exports = function ($, w) {
 				$items.each(function (i, element) {
 					// Item
 					var $item = $(element);
-					var itemSize = $item[o.horizontal ? 'outerWidth' : 'outerHeight']();
+					var rect = element.getBoundingClientRect();
+					var itemSize = Math.ceil(o.horizontal ? rect.width || rect.right - rect.left : rect.height || rect.bottom - rect.top);
 					var itemMarginStart = getPx($item, o.horizontal ? 'marginLeft' : 'marginTop');
 					var itemMarginEnd = getPx($item, o.horizontal ? 'marginRight' : 'marginBottom');
 					var itemSizeFull = itemSize + itemMarginStart + itemMarginEnd;
@@ -197,7 +227,7 @@ module.exports = function ($, w) {
 					item.size = singleSpaced ? itemSize : itemSizeFull;
 					item.half = item.size / 2;
 					item.start = slideeSize + (singleSpaced ? itemMarginStart : 0);
-					item.center = item.start - Math.round(frameSize / 2 - item.size / 2);
+					item.center = item.start - round(frameSize / 2 - item.size / 2);
 					item.end = item.start - frameSize + item.size;
 
 					// Account for slidee padding
@@ -213,7 +243,7 @@ module.exports = function ($, w) {
 					if (!o.horizontal && !areFloated) {
 						// Subtract smaller margin, but only when top margin is not 0, and this is not the first element
 						if (itemMarginEnd && itemMarginStart && i > 0) {
-							slideeSize -= Math.min(itemMarginStart, itemMarginEnd);
+							slideeSize -= min(itemMarginStart, itemMarginEnd);
 						}
 					}
 
@@ -245,7 +275,7 @@ module.exports = function ($, w) {
 			}
 
 			// Calculate SLIDEE center position
-			pos.center = Math.round(pos.end / 2 + pos.start / 2);
+			pos.center = round(pos.end / 2 + pos.start / 2);
 
 			// Update relative positions
 			updateRelatives();
@@ -254,7 +284,7 @@ module.exports = function ($, w) {
 			if ($handle.length && sbSize > 0) {
 				// Stretch scrollbar handle to represent the visible area
 				if (o.dynamicHandle) {
-					handleSize = pos.start === pos.end ? sbSize : Math.round(sbSize * frameSize / slideeSize);
+					handleSize = pos.start === pos.end ? sbSize : round(sbSize * frameSize / slideeSize);
 					handleSize = within(handleSize, o.minHandleSize, sbSize);
 					$handle[0].style[o.horizontal ? 'width' : 'height'] = handleSize + 'px';
 				} else {
@@ -312,19 +342,16 @@ module.exports = function ($, w) {
 
 			// Activate requested position
 			if (itemNav) {
-				if (!self.initialized) {
+				if (isInit && o.startAt != null) {
 					activate(o.startAt);
 					self[centeredNav ? 'toCenter' : 'toStart'](o.startAt);
-				} else if (rel.activeItem >= items.length || lastItemsCount === 0 && items.length > 0) {
-					// Activate last item if previous active has been removed, or first item
-					// when there were no items before, and new got appended.
-					activate(rel.activeItem >= items.length ? items.length - 1 : 0, !lastItemsCount);
 				}
 				// Fix possible overflowing
-				slideTo(centeredNav && items.length ? items[rel.activeItem].center : within(pos.dest, pos.start, pos.end));
+				var activeItem = items[rel.activeItem];
+				slideTo(centeredNav && activeItem ? activeItem.center : within(pos.dest, pos.start, pos.end));
 			} else {
-				if (!self.initialized) {
-					slideTo(o.startAt, 1);
+				if (isInit) {
+					if (o.startAt != null) slideTo(o.startAt, 1);
 				} else {
 					// Fix possible overflowing
 					slideTo(within(pos.dest, pos.start, pos.end));
@@ -334,7 +361,7 @@ module.exports = function ($, w) {
 			// Trigger load event
 			trigger('load');
 		}
-		self.reload = load;
+		self.reload = function () { load(); };
 
 		/**
 		 * Animate to a position.
@@ -410,6 +437,10 @@ module.exports = function ($, w) {
 		 * @return {Void}
 		 */
 		function render() {
+			if (!self.initialized) {
+				return;
+			}
+
 			// If first render call, wait for next animationFrame
 			if (!renderID) {
 				renderID = rAF(render);
@@ -427,7 +458,7 @@ module.exports = function ($, w) {
 			else if (animation.tweesing) {
 				animation.tweeseDelta = animation.to - pos.cur;
 				// Fuck Zeno's paradox
-				if (Math.abs(animation.tweeseDelta) < 0.1) {
+				if (abs(animation.tweeseDelta) < 0.1) {
 					pos.cur = animation.to;
 				} else {
 					pos.cur += animation.tweeseDelta * (dragging.released ? o.swingSpeed : o.syncSpeed);
@@ -435,8 +466,8 @@ module.exports = function ($, w) {
 			}
 			// Use tweening for basic animations with known end point
 			else {
-				animation.time = Math.min(+new Date() - animation.start, o.speed);
-				pos.cur = animation.from + animation.delta * jQuery.easing[o.easing](animation.time/o.speed, animation.time, 0, 1, o.speed);
+				animation.time = min(+new Date() - animation.start, o.speed);
+				pos.cur = animation.from + animation.delta * $.easing[o.easing](animation.time/o.speed, animation.time, 0, 1, o.speed);
 			}
 
 			// If there is nothing more to render break the rendering loop, otherwise request new animation frame.
@@ -454,7 +485,7 @@ module.exports = function ($, w) {
 				if (transform) {
 					$slidee[0].style[transform] = gpuAcceleration + (o.horizontal ? 'translateX' : 'translateY') + '(' + (-pos.cur) + 'px)';
 				} else {
-					$slidee[0].style[o.horizontal ? 'left' : 'top'] = -Math.round(pos.cur) + 'px';
+					$slidee[0].style[o.horizontal ? 'left' : 'top'] = -round(pos.cur) + 'px';
 				}
 			}
 
@@ -474,7 +505,7 @@ module.exports = function ($, w) {
 		function syncScrollbar() {
 			if ($handle.length) {
 				hPos.cur = pos.start === pos.end ? 0 : (((dragging.init && !dragging.slidee) ? pos.dest : pos.cur) - pos.start) / (pos.end - pos.start) * hPos.end;
-				hPos.cur = within(Math.round(hPos.cur), hPos.start, hPos.end);
+				hPos.cur = within(round(hPos.cur), hPos.start, hPos.end);
 				if (last.hPos !== hPos.cur) {
 					last.hPos = hPos.cur;
 					if (transform) {
@@ -571,7 +602,7 @@ module.exports = function ($, w) {
 			move.now = +new Date();
 			move.pos = pos.cur + (move.now - move.lastTime) / 1000 * move.speed;
 			// Slide
-			slideTo(dragging.init ? move.pos : Math.round(move.pos));
+			slideTo(dragging.init ? move.pos : round(move.pos));
 			// Normally, this is triggered in render(), but if there
 			// is nothing to render, we have to do it manually here.
 			if (!dragging.init && pos.cur === pos.dest) {
@@ -599,7 +630,7 @@ module.exports = function ($, w) {
 		 * @return {Void}
 		 */
 		self.prev = function () {
-			self.activate(rel.activeItem - 1);
+			self.activate(rel.activeItem == null ? 0 : rel.activeItem - 1);
 		};
 
 		/**
@@ -608,7 +639,7 @@ module.exports = function ($, w) {
 		 * @return {Void}
 		 */
 		self.next = function () {
-			self.activate(rel.activeItem + 1);
+			self.activate(rel.activeItem == null ? 0 : rel.activeItem + 1);
 		};
 
 		/**
@@ -739,10 +770,10 @@ module.exports = function ($, w) {
 		 */
 		function getIndex(item) {
 			return item != null ?
-					isNumber(item) ?
-						item >= 0 && item < items.length ? item : -1 :
-						$items.index(item) :
-					-1;
+				isNumber(item) ?
+					item >= 0 && item < items.length ? item : -1 :
+					$items.index(item) :
+				-1;
 		}
 		// Expose getIndex without lowering the compressibility of it,
 		// as it is used quite often throughout Sly.
@@ -915,7 +946,7 @@ module.exports = function ($, w) {
 		function updateButtonsState() {
 			var isStart = pos.dest <= pos.start;
 			var isEnd = pos.dest >= pos.end;
-			var slideePosState = isStart ? 1 : isEnd ? 2 : 3;
+			var slideePosState = (isStart ? 1 : 0) | (isEnd ? 2 : 0);
 
 			// Update paging buttons only if there has been a change in SLIDEE position
 			if (last.slideePosState !== slideePosState) {
@@ -948,10 +979,10 @@ module.exports = function ($, w) {
 			}
 
 			// Item navigation
-			if (itemNav) {
+			if (itemNav && rel.activeItem != null) {
 				var isFirst = rel.activeItem === 0;
 				var isLast = rel.activeItem >= items.length - 1;
-				var itemsButtonState = isFirst ? 1 : isLast ? 2 : 3;
+				var itemsButtonState = (isFirst ? 1 : 0) | (isLast ? 2 : 0);
 
 				if (last.itemsButtonState !== itemsButtonState) {
 					last.itemsButtonState = itemsButtonState;
@@ -978,7 +1009,7 @@ module.exports = function ($, w) {
 		 * @return {Void}
 		 */
 		self.resume = function (priority) {
-			if (!o.cycleBy || !o.cycleInterval || o.cycleBy === 'items' && !items[0] || priority < self.isPaused) {
+			if (!o.cycleBy || !o.cycleInterval || o.cycleBy === 'items' && (!items[0] || rel.activeItem == null) || priority < self.isPaused) {
 				return;
 			}
 
@@ -1062,14 +1093,14 @@ module.exports = function ($, w) {
 
 			if (itemNav) {
 				// Insert the element(s)
-				if (index == null || !items[0]) {
+				if (index == null || !items[0] || index >= items.length) {
 					$element.appendTo($slidee);
 				} else if (items.length) {
 					$element.insertBefore(items[index].el);
 				}
 
 				// Adjust the activeItem index
-				if (index <= rel.activeItem) {
+				if (rel.activeItem != null && index <= rel.activeItem) {
 					last.active = rel.activeItem += $element.length;
 				}
 			} else {
@@ -1100,7 +1131,7 @@ module.exports = function ($, w) {
 					var reactivate = index === rel.activeItem;
 
 					// Adjust the activeItem index
-					if (index < rel.activeItem) {
+					if (rel.activeItem != null && index < rel.activeItem) {
 						last.active = --rel.activeItem;
 					}
 
@@ -1141,10 +1172,12 @@ module.exports = function ($, w) {
 				var shiftsUp = item > position;
 
 				// Update activeItem index
-				if (item === rel.activeItem) {
-					last.active = rel.activeItem = after ? (shiftsUp ? position + 1 : position) : (shiftsUp ? position : position - 1);
-				} else if (rel.activeItem > shiftStart && rel.activeItem < shiftEnd) {
-					last.active = rel.activeItem += shiftsUp ? 1 : -1;
+				if (rel.activeItem != null) {
+					if (item === rel.activeItem) {
+						last.active = rel.activeItem = after ? (shiftsUp ? position + 1 : position) : (shiftsUp ? position : position - 1);
+					} else if (rel.activeItem > shiftStart && rel.activeItem < shiftEnd) {
+						last.active = rel.activeItem += shiftsUp ? 1 : -1;
+					}
 				}
 
 				// Reload
@@ -1192,7 +1225,7 @@ module.exports = function ($, w) {
 						self.on(key, name[key]);
 					}
 				}
-			// Callback
+				// Callback
 			} else if (type(fn) === 'function') {
 				var names = name.split(' ');
 				for (var n = 0, nl = names.length; n < nl; n++) {
@@ -1201,7 +1234,7 @@ module.exports = function ($, w) {
 						callbacks[names[n]].push(fn);
 					}
 				}
-			// Callbacks array
+				// Callbacks array
 			} else if (type(fn) === 'array') {
 				for (var f = 0, fl = fn.length; f < fl; f++) {
 					self.on(name, fn[f]);
@@ -1290,7 +1323,7 @@ module.exports = function ($, w) {
 		 * @return {Int}
 		 */
 		function handleToSlidee(handlePos) {
-			return Math.round(within(handlePos, hPos.start, hPos.end) / hPos.end * (pos.end - pos.start)) + pos.start;
+			return round(within(handlePos, hPos.start, hPos.end) / hPos.end * (pos.end - pos.start)) + pos.start;
 		}
 
 		/**
@@ -1327,14 +1360,14 @@ module.exports = function ($, w) {
 		 * @return {Void}
 		 */
 		function dragInit(event) {
-			// Ignore when already in progress, or interactive element
-			if (dragging.init || isInteractive(event.target)) {
-				return;
-			}
-
 			var isTouch = event.type === 'touchstart';
 			var source = event.data.source;
 			var isSlidee = source === 'slidee';
+
+			// Ignore when already in progress, or interactive element in non-touch navivagion
+			if (dragging.init || !isTouch && isInteractive(event.target)) {
+				return;
+			}
 
 			// Handle dragging conditions
 			if (source === 'handle' && (!o.dragHandle || hPos.start === hPos.end)) {
@@ -1347,14 +1380,15 @@ module.exports = function ($, w) {
 			}
 
 			if (!isTouch) {
-				stopDefault(event, 1);
+				// prevents native image dragging in Firefox
+				stopDefault(event);
 			}
 
 			// Reset dragging object
 			continuousInit(source);
 
 			// Properties used in dragHandler
-			dragging.init = 1;
+			dragging.init = 0;
 			dragging.$source = $(event.target);
 			dragging.touch = isTouch;
 			dragging.pointer = isTouch ? event.originalEvent.touches[0] : event;
@@ -1368,9 +1402,6 @@ module.exports = function ($, w) {
 			dragging.locked = 0;
 			dragging.history = [0, 0, 0, 0];
 			dragging.pathToLock = isSlidee ? isTouch ? 30 : 10 : 0;
-			dragging.initLoc = dragging[o.horizontal ? 'initX' : 'initY'];
-			dragging.deltaMin = isSlidee ? -dragging.initLoc : -hPos.cur;
-			dragging.deltaMax = isSlidee ? document[o.horizontal ? 'width' : 'height'] - dragging.initLoc : hPos.end - hPos.cur;
 
 			// Bind dragging events
 			$doc.on(isTouch ? dragTouchEvents : dragMouseEvents, dragHandler);
@@ -1403,40 +1434,51 @@ module.exports = function ($, w) {
 			dragging.pointer = dragging.touch ? event.originalEvent[dragging.released ? 'changedTouches' : 'touches'][0] : event;
 			dragging.pathX = dragging.pointer.pageX - dragging.initX;
 			dragging.pathY = dragging.pointer.pageY - dragging.initY;
-			dragging.path = Math.sqrt(Math.pow(dragging.pathX, 2) + Math.pow(dragging.pathY, 2));
-			dragging.delta = within(o.horizontal ? dragging.pathX : dragging.pathY, dragging.deltaMin, dragging.deltaMax);
+			dragging.path = sqrt(pow(dragging.pathX, 2) + pow(dragging.pathY, 2));
+			dragging.delta = o.horizontal ? dragging.pathX : dragging.pathY;
 
-			if (!dragging.locked && dragging.path > dragging.pathToLock) {
-				dragging.locked = 1;
-				if (o.horizontal ? Math.abs(dragging.pathX) < Math.abs(dragging.pathY) : Math.abs(dragging.pathX) > Math.abs(dragging.pathY)) {
-					// If path has reached the pathToLock distance, but in a wrong direction, cancel dragging
-					dragging.released = 1;
-				} else if (dragging.slidee) {
-					// Disable click on a source element, as it is unwelcome when dragging SLIDEE
-					dragging.$source.on(clickEvent, disableOneEvent);
+			if (!dragging.released && dragging.path < 1) return;
+
+			// We haven't decided whether this is a drag or not...
+			if (!dragging.init) {
+				// If the drag path was very short, maybe it's not a drag?
+				if (dragging.path < o.dragThreshold) {
+					// If the pointer was released, the path will not become longer and it's
+					// definitely not a drag. If not released yet, decide on next iteration
+					return dragging.released ? dragEnd() : undefined;
 				}
+				else {
+					// If dragging path is sufficiently long we can confidently start a drag
+					// if drag is in different direction than scroll, ignore it
+					if (o.horizontal ? abs(dragging.pathX) > abs(dragging.pathY) : abs(dragging.pathX) < abs(dragging.pathY)) {
+						dragging.init = 1;
+					} else {
+						return dragEnd();
+					}
+				}
+			}
+
+			stopDefault(event);
+
+			// Disable click on a source element, as it is unwelcome when dragging
+			if (!dragging.locked && dragging.path > dragging.pathToLock && dragging.slidee) {
+				dragging.locked = 1;
+				dragging.$source.on(clickEvent, disableOneEvent);
 			}
 
 			// Cancel dragging on release
 			if (dragging.released) {
-				if (!dragging.touch) {
-					stopDefault(event);
-				}
-
 				dragEnd();
 
 				// Adjust path with a swing on mouse release
 				if (o.releaseSwing && dragging.slidee) {
 					dragging.swing = (dragging.delta - dragging.history[0]) / 40 * 300;
 					dragging.delta += dragging.swing;
-					dragging.tweese = Math.abs(dragging.swing) > 10;
+					dragging.tweese = abs(dragging.swing) > 10;
 				}
-			} else {
-				stopDefault(event);
 			}
 
-			slideTo(dragging.slidee ? Math.round(dragging.initPos - dragging.delta) : handleToSlidee(dragging.initPos + dragging.delta));
-
+			slideTo(dragging.slidee ? round(dragging.initPos - dragging.delta) : handleToSlidee(dragging.initPos + dragging.delta));
 		}
 
 		/**
@@ -1446,17 +1488,23 @@ module.exports = function ($, w) {
 		 */
 		function dragEnd() {
 			clearInterval(historyID);
+			dragging.released = true;
 			$doc.off(dragging.touch ? dragTouchEvents : dragMouseEvents, dragHandler);
 			(dragging.slidee ? $slidee : $handle).removeClass(o.draggedClass);
 
-			// Resume ongoing cycle
-			self.resume(1);
+			// Make sure that disableOneEvent is not active in next tick.
+			setTimeout(function () {
+				dragging.$source.off(clickEvent, disableOneEvent);
+			});
 
 			// Normally, this is triggered in render(), but if there
 			// is nothing to render, we have to do it manually here.
 			if (pos.cur === pos.dest && dragging.init) {
 				trigger('moveEnd');
 			}
+
+			// Resume ongoing cycle
+			self.resume(1);
 
 			dragging.init = 0;
 		}
@@ -1523,8 +1571,9 @@ module.exports = function ($, w) {
 		 * @return {Int}
 		 */
 		function normalizeWheelDelta(event) {
-			// event.deltaY needed only for compatibility with jQuery mousewheel plugin in FF & IE
-			scrolling.curDelta = event.wheelDelta ? -event.wheelDelta / 120 : (event.detail || event.deltaY) / 3;
+			// wheelDelta needed only for IE8-
+			scrolling.curDelta = ((o.horizontal ? event.deltaY || event.deltaX : event.deltaY) || -event.wheelDelta);
+			scrolling.curDelta /= event.deltaMode === 1 ? 3 : 100;
 			if (!itemNav) {
 				return scrolling.curDelta;
 			}
@@ -1534,10 +1583,10 @@ module.exports = function ($, w) {
 			}
 			scrolling.last = time;
 			scrolling.delta += scrolling.curDelta;
-			if (Math.abs(scrolling.delta) < 1) {
+			if (abs(scrolling.delta) < 1) {
 				scrolling.finalDelta = 0;
 			} else {
-				scrolling.finalDelta = Math.round(scrolling.delta / 1);
+				scrolling.finalDelta = round(scrolling.delta / 1);
 				scrolling.delta %= 1;
 			}
 			return scrolling.finalDelta;
@@ -1551,12 +1600,24 @@ module.exports = function ($, w) {
 		 * @return {Void}
 		 */
 		function scrollHandler(event) {
+			// Mark event as originating in a Sly instance
+			event.originalEvent[namespace] = self;
+			// Don't hijack global scrolling
+			var time = +new Date();
+			if (lastGlobalWheel + o.scrollHijack > time && $scrollSource[0] !== document && $scrollSource[0] !== window) {
+				lastGlobalWheel = time;
+				return;
+			}
 			// Ignore if there is no scrolling to be done
 			if (!o.scrollBy || pos.start === pos.end) {
 				return;
 			}
-			stopDefault(event, 1);
-			self.slideBy(o.scrollBy * normalizeWheelDelta(event.originalEvent));
+			var delta = normalizeWheelDelta(event.originalEvent);
+			// Trap scrolling only when necessary and/or requested
+			if (o.scrollTrap || delta > 0 && pos.dest < pos.end || delta < 0 && pos.dest > pos.start) {
+				stopDefault(event, 1);
+			}
+			self.slideBy(o.scrollBy * delta);
 		}
 
 		/**
@@ -1611,15 +1672,19 @@ module.exports = function ($, w) {
 		 */
 		function activateHandler(event) {
 			/*jshint validthis:true */
+
 			// Ignore clicks on interactive elements.
 			if (isInteractive(this)) {
-				event.stopPropagation();
+				event.originalEvent[namespace + 'ignore'] = true;
 				return;
 			}
-			// Accept only events from direct SLIDEE children.
-			if (this.parentNode === $slidee[0]) {
-				self.activate(this);
-			}
+
+			// Ignore events that:
+			// - are not originating from direct SLIDEE children
+			// - originated from interactive elements
+			if (this.parentNode !== $slidee[0] || event.originalEvent[namespace + 'ignore']) return;
+
+			self.activate(this);
 		}
 
 		/**
@@ -1680,9 +1745,11 @@ module.exports = function ($, w) {
 		 * @return {Void}
 		 */
 		self.destroy = function () {
+			// Remove the reference to itself
+			Sly.removeInstance(frame);
+
 			// Unbind all events
-			$doc
-				.add($scrollSource)
+			$scrollSource
 				.add($handle)
 				.add($sb)
 				.add($pb)
@@ -1692,7 +1759,10 @@ module.exports = function ($, w) {
 				.add($nextButton)
 				.add($prevPageButton)
 				.add($nextPageButton)
-				.unbind('.' + namespace);
+				.off('.' + namespace);
+
+			// Unbinding specifically as to not nuke out other instances
+			$doc.off('keydown', keyboardHandler);
 
 			// Remove classes
 			$prevButton
@@ -1701,7 +1771,7 @@ module.exports = function ($, w) {
 				.add($nextPageButton)
 				.removeClass(o.disabledClass);
 
-			if ($items) {
+			if ($items && rel.activeItem != null) {
 				$items.eq(rel.activeItem).removeClass(o.activeClass);
 			}
 
@@ -1710,12 +1780,19 @@ module.exports = function ($, w) {
 
 			if (!parallax) {
 				// Unbind events from frame
-				$frame.unbind('.' + namespace);
-				// Reset SLIDEE and handle positions
-				$slidee.add($handle).css(transform || (o.horizontal ? 'left' : 'top'), transform ? 'none' : 0);
+				$frame.off('.' + namespace);
+				// Restore original styles
+				frameStyles.restore();
+				slideeStyles.restore();
+				sbStyles.restore();
+				handleStyles.restore();
 				// Remove the instance from element data storage
 				$.removeData(frame, namespace);
 			}
+
+			// Clean up collections
+			items.length = pages.length = 0;
+			last = {};
 
 			// Reset initialized status and return the instance
 			self.initialized = 0;
@@ -1732,8 +1809,22 @@ module.exports = function ($, w) {
 				return;
 			}
 
+			// Disallow multiple instances on the same element
+			if (Sly.getInstance(frame)) throw new Error('There is already a Sly instance on this element');
+
+			// Store the reference to itself
+			Sly.storeInstance(frame, self);
+
 			// Register callbacks map
 			self.on(callbackMap);
+
+			// Save styles
+			var holderProps = ['overflow', 'position'];
+			var movableProps = ['position', 'webkitTransform', 'msTransform', 'transform', 'left', 'top', 'width', 'height'];
+			frameStyles.save.apply(frameStyles, holderProps);
+			sbStyles.save.apply(sbStyles, holderProps);
+			slideeStyles.save.apply(slideeStyles, movableProps);
+			handleStyles.save.apply(handleStyles, movableProps);
 
 			// Set required styles
 			var $movables = $handle;
@@ -1776,7 +1867,7 @@ module.exports = function ($, w) {
 			}
 
 			// Scrolling navigation
-			$scrollSource.on('DOMMouseScroll.' + namespace + ' mousewheel.' + namespace, scrollHandler);
+			$scrollSource.on(wheelEvent, scrollHandler);
 
 			// Clicking on scrollbar navigation
 			if ($sb[0]) {
@@ -1802,7 +1893,7 @@ module.exports = function ($, w) {
 			}
 
 			// Keyboard navigation
-			$doc.bind('keydown.' + namespace, keyboardHandler);
+			$doc.on('keydown', keyboardHandler);
 
 			if (!parallax) {
 				// Pause on hover
@@ -1811,21 +1902,33 @@ module.exports = function ($, w) {
 				$frame.on('scroll.' + namespace, resetScroll);
 			}
 
+			// Mark instance as initialized
+			self.initialized = 1;
+
 			// Load
-			load();
+			load(true);
 
 			// Initiate automatic cycling
 			if (o.cycleBy && !parallax) {
 				self[o.startPaused ? 'pause' : 'resume']();
 			}
 
-			// Mark instance as initialized
-			self.initialized = 1;
-
 			// Return instance
 			return self;
 		};
 	}
+
+	Sly.getInstance = function (element) {
+		return $.data(element, namespace);
+	};
+
+	Sly.storeInstance = function (element, sly) {
+		return $.data(element, namespace, sly);
+	};
+
+	Sly.removeInstance = function (element) {
+		return $.removeData(element, namespace);
+	};
 
 	/**
 	 * Return type of the value.
@@ -1905,7 +2008,7 @@ module.exports = function ($, w) {
 	 * @return {Int}
 	 */
 	function getPx($item, property) {
-		return 0 | Math.round(String($item.css(property)).replace(/[^\-0-9.]/g, ''));
+		return 0 | round(String($item.css(property)).replace(/[^\-0-9.]/g, ''));
 	}
 
 	/**
@@ -1921,35 +2024,70 @@ module.exports = function ($, w) {
 		return number < min ? min : number > max ? max : number;
 	}
 
+	/**
+	 * Saves element styles for later restoration.
+	 *
+	 * Example:
+	 *   var styles = new StyleRestorer(frame);
+	 *   styles.save('position');
+	 *   element.style.position = 'absolute';
+	 *   styles.restore(); // restores to state before the assignment above
+	 *
+	 * @param {Element} element
+	 */
+	function StyleRestorer(element) {
+		var self = {};
+		self.style = {};
+		self.save = function () {
+			if (!element || !element.nodeType) return;
+			for (var i = 0; i < arguments.length; i++) {
+				self.style[arguments[i]] = element.style[arguments[i]];
+			}
+			return self;
+		};
+		self.restore = function () {
+			if (!element || !element.nodeType) return;
+			for (var prop in self.style) {
+				if (self.style.hasOwnProperty(prop)) element.style[prop] = self.style[prop];
+			}
+			return self;
+		};
+		return self;
+	}
+
 	// Local WindowAnimationTiming interface polyfill
 	(function (w) {
-		var vendors = ['moz', 'webkit', 'o'];
-		var lastTime = 0;
+		rAF = w.requestAnimationFrame
+			|| w.webkitRequestAnimationFrame
+			|| fallback;
 
-		// For a more accurate WindowAnimationTiming interface implementation, ditch the native
-		// requestAnimationFrame when cancelAnimationFrame is not present (older versions of Firefox)
-		for(var i = 0, l = vendors.length; i < l && !cAF; ++i) {
-			cAF = w[vendors[i]+'CancelAnimationFrame'] || w[vendors[i]+'CancelRequestAnimationFrame'];
-			rAF = cAF && w[vendors[i]+'RequestAnimationFrame'];
+		/**
+		 * Fallback implementation.
+		 */
+		var prev = new Date().getTime();
+		function fallback(fn) {
+			var curr = new Date().getTime();
+			var ms = Math.max(0, 16 - (curr - prev));
+			var req = setTimeout(fn, ms);
+			prev = curr;
+			return req;
 		}
 
-		if (!cAF) {
-			rAF = function (callback) {
-				var currTime = +new Date();
-				var timeToCall = Math.max(0, 16 - (currTime - lastTime));
-				lastTime = currTime + timeToCall;
-				return w.setTimeout(function () { callback(currTime + timeToCall); }, timeToCall);
-			};
+		/**
+		 * Cancel.
+		 */
+		var cancel = w.cancelAnimationFrame
+			|| w.webkitCancelAnimationFrame
+			|| w.clearTimeout;
 
-			cAF = function (id) {
-				clearTimeout(id);
-			};
-		}
+		cAF = function(id){
+			cancel.call(w, id);
+		};
 	}(window));
 
 	// Feature detects
 	(function () {
-		var prefixes = ['', 'webkit', 'moz', 'ms', 'o'];
+		var prefixes = ['', 'Webkit', 'Moz', 'ms', 'O'];
 		var el = document.createElement('div');
 
 		function testProp(prop) {
@@ -1985,11 +2123,11 @@ module.exports = function ($, w) {
 		// Apply to all elements
 		return this.each(function (i, element) {
 			// Call with prevention against multiple instantiations
-			var plugin = $.data(element, namespace);
+			var plugin = Sly.getInstance(element);
 
 			if (!plugin && !method) {
 				// Create a new object if it doesn't exist yet
-				plugin = $.data(element, namespace, new Sly(element, options, callbackMap).init());
+				plugin = new Sly(element, options, callbackMap).init();
 			} else if (plugin && method) {
 				// Call method
 				if (plugin[method]) {
@@ -2001,35 +2139,39 @@ module.exports = function ($, w) {
 
 	// Default options
 	Sly.defaults = {
-		horizontal: 0, // Switch to horizontal mode.
+		slidee:     null,  // Selector, DOM element, or jQuery object with DOM element representing SLIDEE.
+		horizontal: false, // Switch to horizontal mode.
 
 		// Item based navigation
-		itemNav:      null, // Item navigation type. Can be: 'basic', 'centered', 'forceCentered'.
-		itemSelector: null, // Select only items that match this selector.
-		smart:        0,    // Repositions the activated item to help with further navigation.
-		activateOn:   null, // Activate an item on this event. Can be: 'click', 'mouseenter', ...
-		activateMiddle: 0,  // Always activate the item in the middle of the FRAME. forceCentered only.
+		itemNav:        null,  // Item navigation type. Can be: 'basic', 'centered', 'forceCentered'.
+		itemSelector:   null,  // Select only items that match this selector.
+		smart:          false, // Repositions the activated item to help with further navigation.
+		activateOn:     null,  // Activate an item on this event. Can be: 'click', 'mouseenter', ...
+		activateMiddle: false, // Always activate the item in the middle of the FRAME. forceCentered only.
 
 		// Scrolling
-		scrollSource: null, // Element for catching the mouse wheel scrolling. Default is FRAME.
-		scrollBy:     0,    // Pixels or items to move per one mouse scroll. 0 to disable scrolling.
+		scrollSource: null,  // Element for catching the mouse wheel scrolling. Default is FRAME.
+		scrollBy:     0,     // Pixels or items to move per one mouse scroll. 0 to disable scrolling.
+		scrollHijack: 300,   // Milliseconds since last wheel event after which it is acceptable to hijack global scroll.
+		scrollTrap:   false, // Don't bubble scrolling when hitting scrolling limits.
 
 		// Dragging
-		dragSource:    null, // Selector or DOM element for catching dragging events. Default is FRAME.
-		mouseDragging: 0,    // Enable navigation by dragging the SLIDEE with mouse cursor.
-		touchDragging: 0,    // Enable navigation by dragging the SLIDEE with touch events.
-		releaseSwing:  0,    // Ease out on dragging swing release.
-		swingSpeed:    0.2,  // Swing synchronization speed, where: 1 = instant, 0 = infinite.
-		elasticBounds: 0,    // Stretch SLIDEE position limits when dragging past FRAME boundaries.
-		interactive:   null, // Selector for special interactive elements.
+		dragSource:    null,  // Selector or DOM element for catching dragging events. Default is FRAME.
+		mouseDragging: false, // Enable navigation by dragging the SLIDEE with mouse cursor.
+		touchDragging: false, // Enable navigation by dragging the SLIDEE with touch events.
+		releaseSwing:  false, // Ease out on dragging swing release.
+		swingSpeed:    0.2,   // Swing synchronization speed, where: 1 = instant, 0 = infinite.
+		elasticBounds: false, // Stretch SLIDEE position limits when dragging past FRAME boundaries.
+		dragThreshold: 3,     // Distance in pixels before Sly recognizes dragging.
+		interactive:   null,  // Selector for special interactive elements.
 
 		// Scrollbar
-		scrollBar:     null, // Selector or DOM element for scrollbar container.
-		dragHandle:    0,    // Whether the scrollbar handle should be draggable.
-		dynamicHandle: 0,    // Scrollbar handle represents the ratio between hidden and visible content.
-		minHandleSize: 50,   // Minimal height or width (depends on sly direction) of a handle in pixels.
-		clickBar:      0,    // Enable navigation by clicking on scrollbar.
-		syncSpeed:     0.5,  // Handle => SLIDEE synchronization speed, where: 1 = instant, 0 = infinite.
+		scrollBar:     null,  // Selector or DOM element for scrollbar container.
+		dragHandle:    false, // Whether the scrollbar handle should be draggable.
+		dynamicHandle: false, // Scrollbar handle represents the ratio between hidden and visible content.
+		minHandleSize: 50,    // Minimal height or width (depends on sly direction) of a handle in pixels.
+		clickBar:      false, // Enable navigation by clicking on scrollbar.
+		syncSpeed:     0.5,   // Handle => SLIDEE synchronization speed, where: 1 = instant, 0 = infinite.
 
 		// Pagesbar
 		pagesBar:       null, // Selector or DOM element for pages bar container.
@@ -2048,21 +2190,21 @@ module.exports = function ($, w) {
 		nextPage: null, // Selector or DOM element for "next page" button.
 
 		// Automated cycling
-		cycleBy:       null, // Enable automatic cycling by 'items' or 'pages'.
-		cycleInterval: 5000, // Delay between cycles in milliseconds.
-		pauseOnHover:  0,    // Pause cycling when mouse hovers over the FRAME.
-		startPaused:   0,    // Whether to start in paused sate.
+		cycleBy:       null,  // Enable automatic cycling by 'items' or 'pages'.
+		cycleInterval: 5000,  // Delay between cycles in milliseconds.
+		pauseOnHover:  false, // Pause cycling when mouse hovers over the FRAME.
+		startPaused:   false, // Whether to start in paused sate.
 
 		// Mixed options
 		moveBy:        300,     // Speed in pixels per second used by forward and backward buttons.
 		speed:         0,       // Animations speed in milliseconds. 0 to disable animations.
 		easing:        'swing', // Easing for duration based (tweening) animations.
-		startAt:       0,       // Starting offset in pixels or items.
+		startAt:       null,    // Starting offset in pixels or items.
 		keyboardNavBy: null,    // Enable keyboard navigation by 'items' or 'pages'.
 
 		// Classes
-		draggedClass:  'dragged',  // Class for dragged elements (like SLIDEE or scrollbar handle).
-		activeClass:   'active',   // Class for active items and pages.
-		disabledClass: 'disabled'  // Class for disabled navigation elements.
+		draggedClass:  'dragged', // Class for dragged elements (like SLIDEE or scrollbar handle).
+		activeClass:   'active',  // Class for active items and pages.
+		disabledClass: 'disabled' // Class for disabled navigation elements.
 	};
 };
